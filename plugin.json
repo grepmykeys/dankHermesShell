@@ -1,0 +1,32 @@
+{
+    "$schema": "https://github.com/AvengeMedia/DankMaterialShell/raw/refs/heads/master/PLUGINS/plugin-schema.json",
+    "id": "dankHermesShell",
+    "name": "Dank Hermes Shell",
+    "description": "Hermes Agent in the DankBar: gateway status, recent activity, approximate token and cost usage with a 7-day chart, recent sessions that reopen in the Hermes TUI, and background one-shot queries.",
+    "version": "0.1.0",
+    "license": "MIT",
+    "author": "grepmykeys",
+    "icon": "smart_toy",
+    "type": "composite",
+    "category": "ai",
+    "capabilities": [
+        "daemon",
+        "dankbar-widget",
+        "ai",
+        "monitoring"
+    ],
+    "components": {
+        "daemon": "./HermesService.qml",
+        "widget": "./HermesWidget.qml"
+    },
+    "settings": "./HermesSettings.qml",
+    "compositors": ["any"],
+    "distro": ["any"],
+    "requires_dms": ">=1.6.0",
+    "dependencies": ["python3"],
+    "permissions": [
+        "process",
+        "settings_read",
+        "settings_write"
+    ]
+}

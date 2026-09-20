@@ -1,0 +1,11 @@
+# Python bytecode and local tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local credentials and runtime state
+.env
+.env.*
+*.log

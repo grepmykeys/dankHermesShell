@@ -1,0 +1,686 @@
+#!/usr/bin/env python3
+"""dank-hermes — data + action helper for the DankHermes DMS plugin.
+
+Every command prints a single JSON object on stdout and exits 0 on success.
+On failure it prints {"ok": false, "error": "..."} and exits non-zero.
+
+Reads Hermes state read-only (never writes to Hermes' databases).
+"""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+import datetime as dt
+import fcntl
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+SCHEMA_VERSION = 1
+
+# ---------------------------------------------------------------- paths
+
+
+def hermes_home() -> str:
+    return os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+
+
+def state_db_path(home: str) -> str:
+    return os.path.join(home, "state.db")
+
+
+def state_dir() -> str:
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "dank-hermes")
+
+
+# ---------------------------------------------------------------- helpers
+
+
+@contextmanager
+def connect_ro(path: str):
+    """Open a SQLite db read-only and close it when the caller is done."""
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def day_start(ts: float | None = None) -> float:
+    """Local midnight for the given epoch seconds (default: now)."""
+    when = dt.datetime.fromtimestamp(ts) if ts is not None else dt.datetime.now()
+    midnight = when.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.timestamp()
+
+
+def window_starts() -> dict[str, float]:
+    now = time.time()
+    today = day_start(now)
+    return {
+        "today": today,
+        "week": today - 6 * 86400,   # today + previous 6 days
+        "month": today - 29 * 86400,
+    }
+
+
+def fmt_tokens(n: int | float | None) -> str:
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n / 1000:.0f}k"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def fmt_cost(usd: float | None) -> str:
+    usd = float(usd or 0.0)
+    if usd == 0:
+        return "$0.00"
+    if usd < 0.01:
+        return f"${usd:.4f}"
+    return f"${usd:.2f}"
+
+
+def fmt_ago(ts: float | None) -> str:
+    if not ts:
+        return "never"
+    delta = max(0.0, time.time() - float(ts))
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 7 * 86400:
+        return f"{int(delta // 86400)}d ago"
+    return dt.datetime.fromtimestamp(float(ts)).strftime("%b %d")
+
+
+def session_label(row: sqlite3.Row | dict) -> str:
+    """Human label for a session: title, else display_name, else the id."""
+    for key in ("title", "display_name"):
+        try:
+            val = row[key]
+        except (KeyError, IndexError):
+            val = None
+        if val and str(val).strip():
+            return str(val).strip()
+    return str(row["id"])
+
+
+def parse_config(path: str) -> dict:
+    """Pull the handful of scalars we display, without a YAML dependency.
+
+    Collects top-level scalars and one level of nesting as "block.key",
+    which is enough for model.default / model.provider / agent.reasoning_effort.
+    """
+    out: dict[str, str] = {}
+    block: str | None = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                indented = line[:1].isspace()
+                m = re.match(r"^\s*([a-zA-Z_][\w]*):\s*(.*?)\s*$", line)
+                if not m:
+                    continue
+                key, val = m.group(1), m.group(2)
+                if not indented:
+                    if val:
+                        out[key] = val.strip().strip("'\"")
+                        block = None
+                    else:
+                        block = key
+                    continue
+                if block:
+                    if val:
+                        out[f"{block}.{key}"] = val.strip().strip("'\"")
+                    elif re.fullmatch(r"\s{2}[a-zA-Z_][\w]*:\s*", line):
+                        pass  # deeper nesting; ignored
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def read_json(path: str):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------- commands
+
+
+def cmd_status(args) -> dict:
+    home = hermes_home()
+    errors: list[str] = []
+
+    gw = read_json(os.path.join(home, "gateway_state.json")) or {}
+    gw_pid = gw.get("pid")
+    gw_running = bool(gw_pid) and pid_alive(gw_pid)
+
+    active = read_json(os.path.join(home, "runtime", "active_sessions.json")) or {}
+    entries = active.get("entries") or [] if isinstance(active, dict) else []
+    live = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        live.append({
+            "sessionId": entry.get("session_id"),
+            "surface": entry.get("surface"),
+            "startedAt": entry.get("started_at"),
+            "pid": entry.get("pid"),
+            "alive": pid_alive(entry.get("pid")),
+        })
+
+    cfg = parse_config(os.path.join(home, "config.yaml"))
+    model = cfg.get("model.default") or cfg.get("model")
+    provider = cfg.get("model.provider") or cfg.get("provider") or ""
+    reasoning = cfg.get("agent.reasoning_effort") or ""
+
+    # newest session's model is the best "what is actually running" signal
+    model_in_use = None
+    running = False
+    db = state_db_path(home)
+    if os.path.exists(db):
+        try:
+            with connect_ro(db) as conn:
+                row = conn.execute(
+                    "SELECT model, last_activity_at FROM sessions "
+                    "ORDER BY last_activity_at DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    model_in_use = row["model"]
+                    running = bool(row["last_activity_at"] and time.time() - row["last_activity_at"] < 300)
+        except sqlite3.Error as exc:
+            errors.append(f"state.db: {exc}")
+    else:
+        errors.append("state.db not found")
+
+    platforms = gw.get("platforms") or {}
+    connected = sorted(
+        name for name, info in platforms.items()
+        if isinstance(info, dict) and info.get("state") == "connected"
+    )
+
+    return {
+        "ok": True,
+        "schema": SCHEMA_VERSION,
+        "hermesHome": home,
+        "gateway": {
+            "running": gw_running,
+            "pid": gw_pid,
+            "state": gw.get("gateway_state") or ("running" if gw_running else "stopped"),
+            "version": gw.get("code_version"),
+            "activeAgents": gw.get("active_agents") or 0,
+            "connectedPlatforms": connected,
+            "updatedAt": gw.get("updated_at"),
+        },
+        "agent": {
+            "model": model_in_use or model,
+            "configuredModel": model,
+            "provider": provider,
+            "reasoning": reasoning,
+            "active": running,
+        },
+        "liveSessions": live,
+        "errors": errors,
+        "fetchedAt": time.time(),
+    }
+
+
+def _usage_rows(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT model,
+               SUM(api_call_count)     AS calls,
+               SUM(input_tokens)       AS input_tokens,
+               SUM(output_tokens)      AS output_tokens,
+               SUM(cache_read_tokens)  AS cache_read_tokens,
+               SUM(reasoning_tokens)   AS reasoning_tokens,
+               SUM(estimated_cost_usd) AS cost
+        FROM session_model_usage
+        WHERE COALESCE(last_seen, first_seen, 0) >= ?
+        GROUP BY model
+        ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC
+        """,
+        (since,),
+    ).fetchall()
+
+
+def _totals(rows: list[sqlite3.Row]) -> dict:
+    return {
+        "calls": sum(int(r["calls"] or 0) for r in rows),
+        "inputTokens": sum(int(r["input_tokens"] or 0) for r in rows),
+        "outputTokens": sum(int(r["output_tokens"] or 0) for r in rows),
+        "cacheReadTokens": sum(int(r["cache_read_tokens"] or 0) for r in rows),
+        "reasoningTokens": sum(int(r["reasoning_tokens"] or 0) for r in rows),
+        "cost": sum(float(r["cost"] or 0.0) for r in rows),
+    }
+
+
+def cmd_usage(args) -> dict:
+    home = hermes_home()
+    db = state_db_path(home)
+    if not os.path.exists(db):
+        return {"ok": False, "error": f"state.db not found at {db}"}
+
+    starts = window_starts()
+    days = max(1, int(args.days or 7))
+    series_start = day_start() - (days - 1) * 86400
+
+    with connect_ro(db) as conn:
+        today_rows = _usage_rows(conn, starts["today"])
+        week_rows = _usage_rows(conn, starts["week"])
+        month_rows = _usage_rows(conn, starts["month"])
+        all_rows = _usage_rows(conn, 0)
+        series_rows = conn.execute(
+            """
+            SELECT CAST((COALESCE(last_seen, first_seen, 0) - ?) / 86400 AS INTEGER) AS day_idx,
+                   SUM(input_tokens + output_tokens) AS tokens,
+                   SUM(estimated_cost_usd)           AS cost
+            FROM session_model_usage
+            WHERE COALESCE(last_seen, first_seen, 0) >= ?
+            GROUP BY day_idx
+            ORDER BY day_idx
+            """,
+            (series_start, series_start),
+        ).fetchall()
+
+    today = _totals(today_rows)
+    week = _totals(week_rows)
+    month = _totals(month_rows)
+    alltime = _totals(all_rows)
+
+    by_model = []
+    all_by_model = {r["model"]: r for r in all_rows}
+    for row in week_rows:
+        name = row["model"] or "unknown"
+        alltime_row = all_by_model.get(name)
+        by_model.append({
+            "model": name,
+            "weekTokens": int(row["input_tokens"] or 0) + int(row["output_tokens"] or 0),
+            "allTokens": (int(alltime_row["input_tokens"] or 0) + int(alltime_row["output_tokens"] or 0))
+                         if alltime_row else 0,
+            "calls": int(row["calls"] or 0),
+            "cost": float(row["cost"] or 0.0),
+        })
+
+    buckets = {int(r["day_idx"]): r for r in series_rows}
+    series = []
+    for idx in range(days):
+        row = buckets.get(idx)
+        day_ts = series_start + idx * 86400
+        series.append({
+            "date": dt.datetime.fromtimestamp(day_ts).strftime("%Y-%m-%d"),
+            "label": dt.datetime.fromtimestamp(day_ts).strftime("%a"),
+            "tokens": int(row["tokens"] or 0) if row else 0,
+            "cost": float(row["cost"] or 0.0) if row else 0.0,
+        })
+
+    return {
+        "ok": True,
+        "schema": SCHEMA_VERSION,
+        "today": today,
+        "week": week,
+        "month": month,
+        "allTime": alltime,
+        "byModel": by_model,
+        "series": series,
+        "pretty": {
+            "today": fmt_tokens(today["inputTokens"] + today["outputTokens"]),
+            "todayCost": fmt_cost(today["cost"]),
+            "week": fmt_tokens(week["inputTokens"] + week["outputTokens"]),
+            "weekCost": fmt_cost(week["cost"]),
+            "allTime": fmt_tokens(alltime["inputTokens"] + alltime["outputTokens"]),
+            "allTimeCost": fmt_cost(alltime["cost"]),
+        },
+        "fetchedAt": time.time(),
+    }
+
+
+def cmd_sessions(args) -> dict:
+    home = hermes_home()
+    db = state_db_path(home)
+    if not os.path.exists(db):
+        return {"ok": False, "error": f"state.db not found at {db}"}
+
+    limit = max(1, min(100, int(args.limit or 20)))
+    where = ["archived = 0"]
+    if not getattr(args, "include_hidden", False):
+        where.append("hidden = 0")
+    sql = f"""
+        SELECT id, source, display_name, title, model, cwd, git_branch,
+               started_at, last_activity_at, last_activity_description,
+               message_count, tool_call_count, input_tokens, output_tokens,
+               estimated_cost_usd, profile_name, pinned
+        FROM sessions
+        WHERE {' AND '.join(where)}
+        ORDER BY COALESCE(last_activity_at, started_at) DESC
+        LIMIT ?
+    """
+    with connect_ro(db) as conn:
+        rows = conn.execute(sql, (limit,)).fetchall()
+
+    active = read_json(os.path.join(home, "runtime", "active_sessions.json")) or {}
+    entries = active.get("entries") or [] if isinstance(active, dict) else []
+    live_by_session = {}
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("session_id"):
+            live_by_session[entry["session_id"]] = pid_alive(entry.get("pid"))
+
+    sessions = []
+    for row in rows:
+        tokens = int(row["input_tokens"] or 0) + int(row["output_tokens"] or 0)
+        sessions.append({
+            "id": row["id"],
+            "label": session_label(row),
+            "source": row["source"],
+            "model": row["model"] or "",
+            "cwd": row["cwd"] or "",
+            "gitBranch": row["git_branch"] or "",
+            "profile": row["profile_name"] or "default",
+            "startedAt": row["started_at"],
+            "lastActivityAt": row["last_activity_at"] or row["started_at"],
+            "lastActivity": row["last_activity_description"] or "",
+            "ago": fmt_ago(row["last_activity_at"] or row["started_at"]),
+            "messages": int(row["message_count"] or 0),
+            "toolCalls": int(row["tool_call_count"] or 0),
+            "tokens": tokens,
+            "tokensPretty": fmt_tokens(tokens),
+            "cost": float(row["estimated_cost_usd"] or 0.0),
+            "costPretty": fmt_cost(row["estimated_cost_usd"]),
+            "pinned": bool(row["pinned"]),
+            "active": live_by_session.get(row["id"], False),
+        })
+
+    return {"ok": True, "schema": SCHEMA_VERSION, "sessions": sessions, "fetchedAt": time.time()}
+
+
+def terminal_candidates() -> list[list[str]]:
+    """Preferred terminal emulators, best first."""
+    out = []
+    for name, args in (
+        ("kitty", ["-e"]),
+        ("ghostty", ["-e"]),
+        ("alacritty", ["-e"]),
+        ("foot", []),
+        ("wezterm", ["start", "--"]),
+        ("konsole", ["-e"]),
+    ):
+        if shutil.which(name):
+            out.append([name] + args)
+    return out
+
+
+def resolve_terminal(preferred: str | None) -> list[str]:
+    if preferred:
+        parts = preferred.split()
+        if parts and shutil.which(parts[0]):
+            return parts
+    cands = terminal_candidates()
+    return cands[0] if cands else []
+
+
+def hermes_argv() -> list[str]:
+    exe = os.path.join(hermes_home(), "hermes-agent", "venv", "bin", "hermes")
+    if os.path.exists(exe):
+        return [exe]
+    found = shutil.which("hermes")
+    return [found] if found else []
+
+
+def cmd_terminal_argv(args) -> dict:
+    term = resolve_terminal(getattr(args, "terminal", None))
+    if not term:
+        return {"ok": False, "error": "no supported terminal emulator found"}
+    hermes = hermes_argv()
+    if not hermes:
+        return {"ok": False, "error": "hermes executable not found"}
+    inner = hermes + ["chat", "--tui"]
+    if args.resume:
+        inner += ["--resume", args.resume]
+    if args.query:
+        # seeded as the first interactive turn, so the user can keep talking
+        inner += ["--query-file", write_query_file(args.query)]
+    return {"ok": True, "argv": term + inner, "terminal": term, "inner": inner}
+
+
+def write_query_file(text: str) -> str:
+    """Write the prompt to a file so nothing is shell-interpreted."""
+    target_dir = state_dir()
+    os.makedirs(target_dir, mode=0o700, exist_ok=True)
+    os.chmod(target_dir, 0o700)
+    fd, path = tempfile.mkstemp(prefix="query-", suffix=".txt", dir=target_dir)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+def launch(argv: list[str]) -> bool:
+    """Start a detached process without a shell."""
+    try:
+        subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except OSError:
+        return False
+
+
+def cmd_open(args) -> dict:
+    res = cmd_terminal_argv(args)
+    if not res.get("ok"):
+        return res
+    if not launch(res["argv"]):
+        return {"ok": False, "error": f"failed to launch {res['argv'][0]}"}
+    return {"ok": True, "argv": res["argv"]}
+
+
+def cmd_prompt(args) -> dict:
+    """One-shot query in the background; the answer lands in a log file."""
+    text = (args.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty prompt"}
+    hermes = hermes_argv()
+    if not hermes:
+        return {"ok": False, "error": "hermes executable not found"}
+
+    target_dir = state_dir()
+    os.makedirs(target_dir, exist_ok=True)
+    query_path = write_query_file(text)
+    log_path = os.path.join(target_dir, "last-answer.log")
+    try:
+        # Lock before truncating. The child inherits the locked open-file
+        # description through stdout, keeping it locked until it exits.
+        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as log:
+            os.fchmod(log.fileno(), 0o600)
+            try:
+                fcntl.flock(log.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.unlink(query_path)
+                return {"ok": False, "error": "a background query is already running"}
+            log.truncate(0)
+            subprocess.Popen(
+                hermes + ["chat", "--query-file", query_path, "--oneshot", "-Q",
+                          "--source", "dankhermes"],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "logPath": log_path, "queryPath": query_path, "startedAt": time.time()}
+
+
+def cmd_answer(args) -> dict:
+    """Read back the most recent one-shot answer."""
+    path = os.path.join(state_dir(), "last-answer.log")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return {"ok": True, "text": "", "path": path, "exists": False}
+    mtime = os.path.getmtime(path)
+    return {
+        "ok": True,
+        "text": text,
+        "path": path,
+        "exists": True,
+        "modifiedAt": mtime,
+        "ago": fmt_ago(mtime),
+        "running": any(
+            "hermes" in cmdline and "--source dankhermes" in cmdline
+            for _, cmdline in _process_table()
+        ),
+    }
+
+
+def _process_table() -> list[tuple[str, str]]:
+    proc = "/proc"
+    if not os.path.isdir(proc):
+        return []
+    out = []
+    for entry in os.listdir(proc):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, entry, "cmdline"), "rb") as fh:
+                raw = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        out.append((entry, raw.replace("\x00", " ")))
+    return out
+
+
+def cmd_pid(args) -> dict:
+    """Find a running hermes process by session id (used to detect activity)."""
+    needle = args.session or ""
+    hits = []
+    for pid, cmdline in _process_table():
+        if "hermes" in cmdline and (not needle or needle in cmdline):
+            hits.append({"pid": int(pid), "cmd": cmdline.strip()})
+    return {"ok": True, "matches": hits}
+
+
+def cmd_doctor(args) -> dict:
+    home = hermes_home()
+    checks = []
+
+    def add(name, ok, detail=""):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    hermes = hermes_argv()
+    add("hermes executable", bool(hermes), hermes[0] if hermes else "not found")
+    db = state_db_path(home)
+    add("state.db readable", os.path.exists(db), db)
+    if os.path.exists(db):
+        try:
+            with connect_ro(db) as conn:
+                conn.execute("SELECT 1 FROM sessions LIMIT 1").fetchone()
+            add("state.db query", True, "ok")
+        except sqlite3.Error as exc:
+            add("state.db query", False, str(exc))
+    term = resolve_terminal(None)
+    add("terminal emulator", bool(term), " ".join(term) if term else "none found")
+    add("hermes home", os.path.isdir(home), home)
+    gw = read_json(os.path.join(home, "gateway_state.json")) or {}
+    add("gateway state file", bool(gw), gw.get("gateway_state") or "missing")
+
+    return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
+
+# ---------------------------------------------------------------- cli
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="dank-hermes", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("status", help="gateway, model and live session status")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("usage", help="token and cost totals")
+    p.add_argument("--days", type=int, default=7)
+    p.set_defaults(func=cmd_usage)
+
+    p = sub.add_parser("sessions", help="recent sessions")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--include-hidden", action="store_true")
+    p.set_defaults(func=cmd_sessions)
+
+    p = sub.add_parser("terminal-argv", help="build the TUI launch command")
+    p.add_argument("--query", default="")
+    p.add_argument("--resume", default="")
+    p.add_argument("--terminal", default="")
+    p.set_defaults(func=cmd_terminal_argv)
+
+    p = sub.add_parser("open", help="launch the Hermes TUI")
+    p.add_argument("--query", default="")
+    p.add_argument("--resume", default="")
+    p.add_argument("--terminal", default="")
+    p.set_defaults(func=cmd_open)
+
+    p = sub.add_parser("prompt", help="run a one-shot Hermes query in the background")
+    p.add_argument("--text", required=True)
+    p.set_defaults(func=cmd_prompt)
+
+    p = sub.add_parser("answer", help="read the last one-shot answer")
+    p.set_defaults(func=cmd_answer)
+
+    p = sub.add_parser("pid", help="find running hermes processes")
+    p.add_argument("--session", default="")
+    p.set_defaults(func=cmd_pid)
+
+    p = sub.add_parser("doctor", help="dependency and data checks")
+    p.set_defaults(func=cmd_doctor)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        result = args.func(args)
+    except Exception as exc:  # never traceback into the QML process
+        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    json.dump(result, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
