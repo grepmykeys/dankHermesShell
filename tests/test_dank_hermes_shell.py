@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for the dank-hermes helper.
+"""Tests for the dank-hermes-shell helper.
 
-Run: python3 -m unittest tests/test_dank_hermes.py
+Run: python3 -m unittest discover -s tests
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
-HELPER = ROOT / "bin" / "dank-hermes"
+HELPER = ROOT / "bin" / "dank-hermes-shell"
 
 
 def load_helper():
     spec = importlib.util.spec_from_loader(
-        "dank_hermes", importlib.machinery.SourceFileLoader("dank_hermes", str(HELPER))
+        "dank_hermes_shell", importlib.machinery.SourceFileLoader("dank_hermes_shell", str(HELPER))
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -380,12 +380,12 @@ class TestActions(unittest.TestCase):
 class TestAnswer(unittest.TestCase):
     def test_running_query_is_reported_until_hermes_exits(self):
         with tempfile.TemporaryDirectory() as state_home:
-            answer_dir = Path(state_home) / "dank-hermes"
+            answer_dir = Path(state_home) / "dank-hermes-shell"
             answer_dir.mkdir()
             (answer_dir / "last-answer.log").write_text("partial answer", encoding="utf-8")
             with patch.dict(os.environ, {"XDG_STATE_HOME": state_home}):
                 with patch.object(h, "_process_table", return_value=[
-                    ("12345", "/home/p/.hermes/venv/bin/hermes chat --oneshot --source dankhermes")
+                    ("12345", "/home/p/.hermes/venv/bin/hermes chat --oneshot --source dankHermesShell")
                 ]):
                     self.assertTrue(h.cmd_answer(None)["running"])
                 with patch.object(h, "_process_table", return_value=[]):

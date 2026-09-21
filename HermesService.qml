@@ -6,9 +6,9 @@ import qs.Modules.Plugins
 import qs.Services
 
 /**
- * HermesService — the daemon surface of DankHermes.
+ * HermesService — the daemon surface of Dank Hermes Shell.
  *
- * Owns every call into the bundled `bin/dank-hermes` helper, holds the latest
+ * Owns every call into the bundled `bin/dank-hermes-shell` helper, holds the latest
  * Hermes state (status / usage / sessions), and publishes itself as a plugin
  * global so every bar and dock instance shares one poller.
  *
@@ -39,7 +39,7 @@ PluginComponent {
     property bool polling: true
 
     readonly property string helperPath: {
-        const url = Qt.resolvedUrl("bin/dank-hermes").toString().replace(/^file:\/\//, "");
+        const url = Qt.resolvedUrl("bin/dank-hermes-shell").toString().replace(/^file:\/\//, "");
         return decodeURIComponent(url);
     }
 
@@ -154,7 +154,7 @@ PluginComponent {
                     root.errorAction = action;
                     ToastService.showError("Hermes", message);
                 }
-                console.warn("DankHermes: helper failed:", message);
+                console.warn("Dank Hermes Shell: helper failed:", message);
             } else {
                 if (action === "status") {
                     root.status = result;
@@ -162,7 +162,7 @@ PluginComponent {
                     root.errorAction = "";
                     if (!root.loggedFirstPoll) {
                         root.loggedFirstPoll = true;
-                        console.info("DankHermes: first status poll ok — gateway "
+                        console.info("Dank Hermes Shell: first status poll ok — gateway "
                             + (result.gateway?.running ? "running" : "stopped")
                             + ", model " + (result.agent?.model ?? "unknown")
                             + ", live " + (result.liveSessions?.length ?? 0));

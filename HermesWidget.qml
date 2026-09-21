@@ -5,7 +5,7 @@ import qs.Modules.Plugins
 import "components"
 
 /**
- * DankHermes bar widget.
+ * Dank Hermes Shell bar widget.
  *
  * Reads the shared HermesService published by the daemon surface, so every
  * bar and dock instance renders from one poller.

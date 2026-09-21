@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dank-hermes — data + action helper for the DankHermes DMS plugin.
+"""dank-hermes-shell — data + action helper for the Dank Hermes Shell DMS plugin.
 
 Every command prints a single JSON object on stdout and exits 0 on success.
 On failure it prints {"ok": false, "error": "..."} and exits non-zero.
@@ -38,7 +38,7 @@ def state_db_path(home: str) -> str:
 
 def state_dir() -> str:
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    return os.path.join(base, "dank-hermes")
+    return os.path.join(base, "dank-hermes-shell")
 
 
 # ---------------------------------------------------------------- helpers
@@ -533,7 +533,7 @@ def cmd_prompt(args) -> dict:
             log.truncate(0)
             subprocess.Popen(
                 hermes + ["chat", "--query-file", query_path, "--oneshot", "-Q",
-                          "--source", "dankhermes"],
+                          "--source", "dankHermesShell"],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -561,7 +561,7 @@ def cmd_answer(args) -> dict:
         "modifiedAt": mtime,
         "ago": fmt_ago(mtime),
         "running": any(
-            "hermes" in cmdline and "--source dankhermes" in cmdline
+            "hermes" in cmdline and "--source dankHermesShell" in cmdline
             for _, cmdline in _process_table()
         ),
     }
@@ -625,7 +625,7 @@ def cmd_doctor(args) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="dank-hermes", description=__doc__)
+    parser = argparse.ArgumentParser(prog="dank-hermes-shell", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("status", help="gateway, model and live session status")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manifest and layout checks for the DankHermes plugin.
+"""Manifest and layout checks for the Dank Hermes Shell plugin.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXPECTED_ID = "dankHermes"
+EXPECTED_ID = "dankHermesShell"
 
 
 class TestManifest(unittest.TestCase):
@@ -26,6 +26,15 @@ class TestManifest(unittest.TestCase):
 
     def test_version_is_semver(self):
         self.assertRegex(self.manifest["version"], r"^\d+\.\d+\.\d+$")
+
+    def test_settings_and_documentation_match_identity(self):
+        self.assertEqual(self.manifest["name"], "Dank Hermes Shell")
+        settings = (ROOT / "HermesSettings.qml").read_text(encoding="utf-8")
+        self.assertIn(f'pluginId: "{EXPECTED_ID}"', settings)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertTrue(readme.startswith("# Dank Hermes Shell\n"))
+        self.assertIn(f"plugins enable {EXPECTED_ID}", readme)
+        self.assertNotRegex(readme, r"\bdankHermes\b")
 
     def test_composite_declares_daemon_and_widget_only(self):
         self.assertEqual(self.manifest["type"], "composite")
@@ -60,12 +69,12 @@ class TestManifest(unittest.TestCase):
 
 class TestLayout(unittest.TestCase):
     def test_helper_is_executable(self):
-        helper = ROOT / "bin" / "dank-hermes"
+        helper = ROOT / "bin" / "dank-hermes-shell"
         self.assertTrue(helper.is_file())
-        self.assertTrue(os.access(helper, os.X_OK), "bin/dank-hermes must be executable")
+        self.assertTrue(os.access(helper, os.X_OK), "bin/dank-hermes-shell must be executable")
 
     def test_helper_is_stdlib_only(self):
-        source = (ROOT / "bin" / "dank-hermes").read_text(encoding="utf-8")
+        source = (ROOT / "bin" / "dank-hermes-shell").read_text(encoding="utf-8")
         imports = set(re.findall(r"^\s*(?:import|from)\s+([a-zA-Z_][\w.]*)", source, re.M))
         stdlib = {
             "argparse", "datetime", "json", "os", "re", "shutil", "sqlite3",
@@ -83,17 +92,17 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_helper_open_uses_argv_not_shell(self):
-        source = (ROOT / "bin" / "dank-hermes").read_text(encoding="utf-8")
+        source = (ROOT / "bin" / "dank-hermes-shell").read_text(encoding="utf-8")
         self.assertNotIn("shell=True", source)
         self.assertNotIn("os.system", source)
 
     def test_helper_reads_hermes_state_read_only(self):
-        source = (ROOT / "bin" / "dank-hermes").read_text(encoding="utf-8")
+        source = (ROOT / "bin" / "dank-hermes-shell").read_text(encoding="utf-8")
         self.assertIn("mode=ro", source)
 
     def test_actions_are_dispatched_without_inline_query_text(self):
         # a query must reach hermes through --query-file, never as a bare argument
-        source = (ROOT / "bin" / "dank-hermes").read_text(encoding="utf-8")
+        source = (ROOT / "bin" / "dank-hermes-shell").read_text(encoding="utf-8")
         self.assertIn("--query-file", source)
         self.assertNotIn('"-q", text', source)
 

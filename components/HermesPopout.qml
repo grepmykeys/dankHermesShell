@@ -15,7 +15,7 @@ PopoutComponent {
     headerText: "Hermes Agent"
     detailsText: {
         const agent = root.service?.status?.agent;
-        if (!agent) return "DankHermes";
+        if (!agent) return "Dank Hermes Shell";
         const bits = [];
         if (agent.provider) bits.push(agent.provider);
         if (agent.model) bits.push(agent.model);
@@ -52,7 +52,7 @@ PopoutComponent {
             StyledText {
                 width: parent.width
                 visible: !root.service
-                text: "Hermes service is not running. Enable the DankHermes daemon component for this plugin."
+                text: "Hermes service is not running. Enable the Dank Hermes Shell daemon component for this plugin."
                 wrapMode: Text.WordWrap
                 color: Theme.error
             }

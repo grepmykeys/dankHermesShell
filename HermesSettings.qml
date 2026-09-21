@@ -5,7 +5,7 @@ import qs.Modules.Plugins
 
 PluginSettings {
     id: root
-    pluginId: "dankHermes"
+    pluginId: "dankHermesShell"
 
     StyledText {
         width: parent.width
@@ -17,7 +17,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "DankHermes reads Hermes' own state (gateway, sessions, token usage) read-only and launches "
+        text: "Dank Hermes Shell reads Hermes' own state (gateway, sessions, token usage) read-only and launches "
             + "the Hermes TUI in your terminal. Nothing is written to ~/.hermes."
         wrapMode: Text.WordWrap
         color: Theme.surfaceVariantText
@@ -93,7 +93,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Run  bin/dank-hermes doctor  in the plugin directory to check the Hermes executable, "
+        text: "Run  bin/dank-hermes-shell doctor  in the plugin directory to check the Hermes executable, "
             + "state.db readability and terminal detection."
         wrapMode: Text.WordWrap
         color: Theme.surfaceVariantText

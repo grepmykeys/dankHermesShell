@@ -1,4 +1,4 @@
-# DankHermes
+# Dank Hermes Shell
 
 A DankMaterialShell plugin that puts **Hermes Agent** in the DMS bar: gateway and agent
 status, a recent-activity indicator, token/cost usage with a 7-day chart, the recent
@@ -41,27 +41,26 @@ Right-click the pill opens a fresh Hermes TUI session.
 
 ## Install
 
-From your local clone (this plugin is not in the plugin registry yet):
+Run from the root of your local clone (this plugin is not in the plugin registry yet):
 
 ```bash
 mkdir -p ~/.config/DankMaterialShell/plugins
-ln -s ~/projects/dms-hermes-plugin/DankHermes \
-      ~/.config/DankMaterialShell/plugins/dankHermes
+ln -s "$PWD" ~/.config/DankMaterialShell/plugins/dankHermesShell
 dms ipc call plugin-scan scan        # discover it
-dms ipc call plugins enable dankHermes
+dms ipc call plugins enable dankHermesShell
 ```
 
-Then place the widget: **Settings → Bar → your bar → Add widget → DankHermes**
+Then place the widget: **Settings → Bar → your bar → Add widget → Dank Hermes Shell**
 (bar layout lists are not writable over IPC), or hold the bar's edit mode and drag it in.
 
-Adjust the clone path above if needed. Requires DankMaterialShell 1.6+, a configured
+Requires DankMaterialShell 1.6+, a configured
 Hermes Agent installation, `python3` (stdlib only, no pip packages), and a terminal emulator for the TUI
 actions: kitty, ghostty, alacritty, foot, wezterm or konsole, or set an explicit
 "Terminal command" in the plugin settings.
 
 ## How it gets its data
 
-`bin/dank-hermes` is a stdlib-only Python helper. Every command prints one JSON object on
+`bin/dank-hermes-shell` is a stdlib-only Python helper. Every command prints one JSON object on
 stdout; QML passes argument arrays, never shell strings. Prompts reach Hermes via
 `--query-file`, although the short-lived helper receives the text as an argument.
 
@@ -91,9 +90,9 @@ optional terminal command override.
 ## Troubleshooting
 
 ```bash
-cd ~/.config/DankMaterialShell/plugins/dankHermes
-./bin/dank-hermes doctor        # dependency + data checks
-./bin/dank-hermes status        # what the popout will show
+cd ~/.config/DankMaterialShell/plugins/dankHermesShell
+./bin/dank-hermes-shell doctor        # dependency + data checks
+./bin/dank-hermes-shell status        # what the popout will show
 python3 -m unittest discover -s tests
 ```
 
@@ -108,13 +107,13 @@ python3 -m unittest discover -s tests
 ## Uninstall
 
 ```bash
-dms ipc call plugins disable dankHermes
-rm ~/.config/DankMaterialShell/plugins/dankHermes   # removes only the symlink
+dms ipc call plugins disable dankHermesShell
+rm ~/.config/DankMaterialShell/plugins/dankHermesShell   # removes only the symlink
 ```
 
 Monitoring leaves Hermes' own data untouched; launched Hermes sessions write their
 normal session state. The helper's answer log and unique query files live in the
-private directory `~/.local/state/dank-hermes` (or `$XDG_STATE_HOME/dank-hermes`).
+private directory `~/.local/state/dank-hermes-shell` (or `$XDG_STATE_HOME/dank-hermes-shell`).
 Only one background query may run at a time. Query files are retained so detached
 TUI launches can read them; you can remove this directory after all queries and
 TUI launches have finished if you no longer need the saved prompts/answer.
@@ -122,7 +121,7 @@ TUI launches have finished if you no longer need the saved prompts/answer.
 ## Layout
 
 ```
-DankHermes/
+dankHermesShell/
   plugin.json              # composite: daemon + bar widget
   HermesService.qml        # daemon surface: polls the helper, holds state, owns actions
   HermesWidget.qml         # bar pill(s) + popout wiring
@@ -133,8 +132,8 @@ DankHermes/
     HermesAskCard.qml
     HermesUsageCard.qml
     HermesSessionRow.qml
-  bin/dank-hermes          # JSON helper (python3, stdlib)
-  tests/test_dank_hermes.py
+  bin/dank-hermes-shell    # JSON helper (python3, stdlib)
+  tests/test_dank_hermes_shell.py
   tests/test_manifest.py
 ```
 
