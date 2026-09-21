@@ -1,0 +1,27 @@
+name: Bug report
+description: Something in Dank Hermes Shell isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you see instead?
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: Paste the output of `./bin/dank-hermes-shell doctor` from the plugin directory
+      render: json
+  - type: input
+    id: dms-version
+    attributes:
+      label: DMS version
+      placeholder: "1.6.2"
+  - type: input
+    id: compositor
+    attributes:
+      label: Compositor
+      placeholder: "Hyprland"

@@ -8,6 +8,10 @@ in the background.
 It is the DMS counterpart to the Omarchy Hermes plugins (Hermes Deck / Hermes Sessions /
 Hermes Harness), written against the DMS 1.6 plugin API for Hyprland + Quickshell.
 
+![Dank Hermes Shell popout](./placeholder-screenshot.png)
+
+*(Placeholder screenshot — will be replaced with a real capture of the bar pill and popout.)*
+
 ## What it shows
 
 **Bar pill** (horizontal and vertical):

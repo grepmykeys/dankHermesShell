@@ -1,5 +1,5 @@
 {
-    "$schema": "https://github.com/AvengeMedia/DankMaterialShell/raw/refs/heads/master/PLUGINS/plugin-schema.json",
+    "$schema": "https://raw.githubusercontent.com/AvengeMedia/DankMaterialShell/master/quickshell/PLUGINS/plugin-schema.json",
     "id": "dankHermesShell",
     "name": "Dank Hermes Shell",
     "description": "Hermes Agent in the DankBar: gateway status, recent activity, approximate token and cost usage with a 7-day chart, recent sessions that reopen in the Hermes TUI, and background one-shot queries.",
